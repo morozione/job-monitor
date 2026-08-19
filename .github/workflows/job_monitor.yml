@@ -29,6 +29,9 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Not a secret -- set via Settings -> Secrets and variables ->
+          # Actions -> Variables tab. Comma-separated, defaults to "android".
+          SEARCH_KEYWORDS: ${{ vars.SEARCH_KEYWORDS }}
         run: python job_monitor.py
 
       - name: Commit updated state

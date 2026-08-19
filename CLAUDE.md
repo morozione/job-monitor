@@ -2,76 +2,70 @@
 
 ## What this project is
 
-A Python bot that monitors Ukrainian job sites (DOU.ua RSS + a few company
-career pages: Kyivstar, PrivatBank, Oschadbank, MODUS X) for new Android
-developer vacancies, and sends alerts to Telegram. It runs on a schedule via
-GitHub Actions (free tier), no server needed.
+A public, template-able Python bot that monitors job sources for postings
+matching a configurable keyword and sends alerts to Telegram. Shipped
+configured for Android developer vacancies in Ukraine (DOU.ua RSS + a few
+company career pages / job-board APIs), but `SEARCH_KEYWORDS` and the source
+lists are meant to be retargeted by anyone who forks it. Runs on a schedule
+via GitHub Actions (free tier), no server needed. See `README.md` for the
+full setup/customization guide — that's the source of truth for end users;
+keep it in sync with any behavior change.
 
 Files:
-- `job_monitor.py` — main script
-- `requirements.txt` — Python deps
-- `state.json` — tracks what's already been seen, so we don't get repeat alerts
-- `.github/workflows/job_monitor.yml` — GitHub Actions schedule (runs 2x/day)
-- `README.md` — full human-readable setup guide
+- `job_monitor.py` — main script. Three source types: DOU RSS
+  (`check_dou_feeds`), career-page HTML link-scraping (`check_career_pages`),
+  Lever/Breezy job-board JSON APIs (`check_lever_boards`/`check_breezy_boards`).
+- `requirements.txt` — Python deps.
+- `state.json` — tracks what's already been seen (per source type, separate
+  buckets), committed back to the repo by CI after every run — this file
+  *is* the persistence layer, there's no database.
+- `.github/workflows/job_monitor.yml` — schedule (2x/day), runs the script
+  with secrets/vars injected, commits the updated `state.json`.
+- `LICENSE` — MIT.
+- `README.md` — full human-readable setup guide.
 
-## Your task
+## Working on this repo
 
-Get this running end-to-end as a scheduled GitHub Actions bot. Concretely:
-
-1. **Sanity-check the code first.** Read `job_monitor.py`. Confirm the
-   dependencies in `requirements.txt` install cleanly and the script has no
-   syntax errors (`python -m py_compile job_monitor.py`). Run it locally once
-   without Telegram secrets set — it should print a "Telegram credentials not
-   set, skipping send" warning and still print the message content to stdout,
-   rather than crashing. Fix anything broken.
-
-2. **Initialize git and create a GitHub repo** (use the `gh` CLI if
-   available; ask me to run `gh auth login` first if it's not authenticated).
-   Make the repo **private**. Suggested name: `android-job-monitor`.
-
-3. **Push all files**, preserving the `.github/workflows/` folder structure —
-   GitHub Actions only picks up workflows from that exact path.
-
-4. **Set up repo secrets.** You cannot generate these yourself — stop and ask
-   me for two values:
-   - `TELEGRAM_BOT_TOKEN` (from @BotFather on Telegram)
-   - `TELEGRAM_CHAT_ID` (from the getUpdates API call, see README.md)
-
-   Once I give them to you, set them with:
-   ```
-   gh secret set TELEGRAM_BOT_TOKEN --body "<value I gave you>"
-   gh secret set TELEGRAM_CHAT_ID --body "<value I gave you>"
-   ```
-   Never print these values back to me or commit them to any file — secrets
-   only, never in code or logs.
-
-5. **Trigger a manual run** to verify it works end-to-end:
-   ```
-   gh workflow run job_monitor.yml
-   ```
-   Then check the run status/logs with `gh run list` and `gh run view
-   --log`. Confirm it completed successfully and (if secrets are correct)
-   that I received a Telegram message.
-
-6. **Report back** with: the repo URL, confirmation the first scheduled run
-   succeeded, and a plain-language summary of what happens next (it'll now
-   run automatically twice a day per the cron schedule in the workflow
-   file).
+- This is Ivan's personal repo, now public as a community template. Treat
+  README.md as documentation other forkers will actually read — keep it
+  accurate when you change behavior (new source types, new env vars, new
+  limitations discovered).
+- Running the script locally without Telegram secrets set should print a
+  "Telegram credentials not set, skipping send" warning and still print the
+  message content to stdout, rather than crashing. Don't break that.
+- Local test runs mutate `state.json`. Before committing, check whether your
+  local run's changes to `state.json` should be kept (advances real seen-state,
+  fine to commit) or reverted (if it consumed items that haven't actually
+  been alerted on and you want the next real run to still alert on them). If
+  the remote has moved since you last synced (scheduled runs commit
+  `state.json` on their own cadence), rebase and take the remote's
+  `state.json` over any local test-run pollution — it reflects real
+  accumulated state.
+- Never print Telegram secret values back to the user or commit them to any
+  file — secrets only, injected via GitHub Actions env vars.
 
 ## Known limitation to watch for
 
-The career-page scraping (Kyivstar especially) uses a simple HTTP GET and
-parses static HTML — it will **not** see content that's rendered client-side
-by JavaScript. If a run completes successfully but a career-page source
-never seems to find anything even when you know new roles are posted there,
-check `README.md` section 5 for how to diagnose this, and flag it to me
-rather than silently leaving it broken. Don't attempt to add a headless
-browser (Playwright/Selenium) to fix this unless I explicitly ask — it adds
-real complexity and I'd rather decide that trade-off knowingly.
+Career-page scraping uses a simple HTTP GET and parses static HTML — it will
+**not** see content that's rendered client-side by JavaScript (confirmed
+dead for Kyivstar, PrivatBank, Oschadbank, and the MODUS X DOU listing as of
+2026-08 — their listings load via JS/widgets requests.get() can't see). If a
+run completes successfully but a source never seems to find anything even
+when new roles are known to exist there, check README.md's Limitations
+section for how to diagnose this, and flag it explicitly rather than
+silently leaving it broken. Don't add a headless browser (Playwright/
+Selenium) to fix this unless explicitly asked — real complexity for a
+free-tier tool, worth deciding knowingly. Prefer finding a JSON API behind
+the widget (as done for Lever/Breezy) over adding a browser dependency.
 
 ## Constraints
 
 - Keep this free-tier friendly — no paid services, no always-on server.
-- Don't change the alert channel from Telegram without asking me.
-- Don't add new source websites without asking — I have a specific list of
-  companies I care about (see `CAREER_PAGES` in `job_monitor.py`).
+- Don't change the alert channel from Telegram without asking.
+- Don't add new source websites without asking — verify candidate URLs
+  actually work (HTTP 200, and real matching content in the raw response —
+  not JS-rendered) before proposing them, the way the Lever/Breezy/monobank/
+  MacPaw additions were verified in August 2026.
+- `SEARCH_KEYWORDS` is a GitHub Actions *variable*, not a secret — it isn't
+  sensitive, and variables are easier for forkers to see/edit. Don't move it
+  to secrets.

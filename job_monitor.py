@@ -1,13 +1,17 @@
 """
-Android job monitor for Ukraine.
+Keyword-based job vacancy monitor, defaulting to Android roles in Ukraine.
 
 Checks:
-  1. DOU.ua RSS feed(s) for new Android vacancies (reliable, structured).
-  2. Raw career pages of priority companies (Kyivstar, PrivatBank, Oschadbank,
-     MODUS X) for any link/text mentioning "android" that wasn't there last run.
+  1. DOU.ua RSS feed(s) for matching vacancies (reliable, structured).
+  2. Raw career pages of configured companies for any link/text matching
+     SEARCH_KEYWORDS that wasn't there last run.
+  3. Lever / Breezy HR job-board JSON APIs for configured companies.
 
 Sends a Telegram message summarizing anything new. State (what we've already
-seen) is stored in state.json so re-running doesn't re-notify you.
+seen) is stored in state.json so re-running doesn't re-notify you. What to
+search for is controlled by the SEARCH_KEYWORDS env var / repo variable
+(defaults to "android") -- see README.md to retarget this at a different
+keyword or role.
 
 Run manually:   python job_monitor.py
 Run in CI:      see .github/workflows/job_monitor.yml
@@ -33,6 +37,16 @@ STATE_FILE = Path(__file__).parent / "state.json"
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+# What to search for. Comma-separated, case-insensitive, matched as a plain
+# substring against job titles / link text (not a regex). Defaults to
+# "android" so this behaves exactly as before if unset. Override via the
+# SEARCH_KEYWORDS repo *variable* (Settings -> Secrets and variables ->
+# Actions -> Variables tab) -- not a secret, since it's not sensitive, and
+# variables are easier to see/edit than secrets.
+SEARCH_KEYWORDS = [
+    kw.strip() for kw in (os.environ.get("SEARCH_KEYWORDS") or "android").split(",") if kw.strip()
+]
 
 # --- Sources -----------------------------------------------------------
 
@@ -75,7 +89,7 @@ BREEZY_BOARDS = {
     "Genesis": "gen-tech",
 }
 
-KEYWORD_RE = re.compile(r"android", re.IGNORECASE)
+KEYWORD_RE = re.compile("|".join(re.escape(kw) for kw in SEARCH_KEYWORDS), re.IGNORECASE)
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; JobMonitorBot/1.0; personal use)"
@@ -111,6 +125,8 @@ def check_dou_feeds(state):
             for entry in feed.entries:
                 entry_id = entry.get("id") or entry.get("link")
                 if not entry_id:
+                    continue
+                if not KEYWORD_RE.search(entry.get("title", "")):
                     continue
                 if entry_id not in seen:
                     new_items.append(
@@ -257,21 +273,22 @@ def send_telegram(message: str):
 
 
 def format_message(dou_items, career_items, board_items):
+    keywords = "/".join(SEARCH_KEYWORDS)
     lines = []
     if dou_items:
-        lines.append("🆕 New DOU Android vacancies:")
+        lines.append(f"🆕 New DOU vacancies matching '{keywords}':")
         for item in dou_items:
             lines.append(f"• {item['title']}\n  {item['link']}")
         lines.append("")
 
     if board_items:
-        lines.append("📋 New Android vacancies on company job boards:")
+        lines.append(f"📋 New job-board vacancies matching '{keywords}':")
         for item in board_items:
             lines.append(f"• [{item['source']}] {item['title']}\n  {item['link']}")
         lines.append("")
 
     if career_items:
-        lines.append("🏢 New Android mentions on career pages:")
+        lines.append(f"🏢 New career-page mentions matching '{keywords}':")
         for item in career_items:
             lines.append(f"• [{item['source']}] {item['title']}\n  {item['link']}")
 
