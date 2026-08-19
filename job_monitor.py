@@ -47,11 +47,32 @@ DOU_RSS_FEEDS = {
 # mentioning android change" check instead of parsing exact job listings,
 # since every company's HTML is different and JS-rendered pages won't work
 # with a simple requests.get() at all (see NOTE below per-company).
+#
+# Kyivstar, PrivatBank, Oschadbank and the MODUS X DOU listing are confirmed
+# (2026-08) to never actually find anything here: their job listings load
+# via client-side JS/widgets, so requests.get() only sees an empty shell.
+# Left in place since they're harmless and DOU RSS is the real safety net,
+# but don't expect alerts from them.
 CAREER_PAGES = {
     "Kyivstar": "https://www.kyivstar.ua/uk/about/career",
     "PrivatBank": "https://work.privatbank.ua/",
     "Oschadbank": "https://www.oschadbank.ua/career",
     "MODUS X (DOU listings)": "https://jobs.dou.ua/companies/modus-x/vacancies/",
+    "monobank": "https://monobank.ua/en/careers",
+    "MacPaw": "https://macpaw.com/jobs",
+}
+
+# Companies whose career sites run on Lever (https://jobs.lever.co/<slug>).
+# Lever exposes a public JSON API of postings per board, which is far more
+# reliable than scraping the corporate site's HTML.
+LEVER_BOARDS = {
+    "Ajax Systems": "ajax",
+}
+
+# Companies whose career sites run on Breezy HR (https://<slug>.breezy.hr).
+# Breezy exposes a public JSON feed of postings per board (<slug>.breezy.hr/json).
+BREEZY_BOARDS = {
+    "Genesis": "gen-tech",
 }
 
 KEYWORD_RE = re.compile(r"android", re.IGNORECASE)
@@ -63,8 +84,14 @@ HEADERS = {
 
 def load_state():
     if STATE_FILE.exists():
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    return {"seen_dou_ids": [], "seen_career_snippets": {}}
+        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    else:
+        state = {}
+    state.setdefault("seen_dou_ids", [])
+    state.setdefault("seen_career_snippets", {})
+    state.setdefault("seen_lever_ids", [])
+    state.setdefault("seen_breezy_ids", [])
+    return state
 
 
 def save_state(state):
@@ -145,6 +172,70 @@ def check_career_pages(state):
     return new_items
 
 
+def check_lever_boards(state):
+    """Lever's public JSON API: https://api.lever.co/v0/postings/<slug>?mode=json"""
+    new_items = []
+    seen = set(state.get("seen_lever_ids", []))
+
+    for label, slug in LEVER_BOARDS.items():
+        url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=20)
+            resp.raise_for_status()
+            for posting in resp.json():
+                title = posting.get("text", "")
+                if not KEYWORD_RE.search(title):
+                    continue
+                posting_id = posting.get("id")
+                if not posting_id or posting_id in seen:
+                    continue
+                new_items.append(
+                    {
+                        "source": f"{label} (Lever)",
+                        "title": title,
+                        "link": posting.get("hostedUrl", url),
+                    }
+                )
+                seen.add(posting_id)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] Error checking {label} (Lever): {exc}")
+
+    state["seen_lever_ids"] = list(seen)
+    return new_items
+
+
+def check_breezy_boards(state):
+    """Breezy HR's public JSON feed: https://<slug>.breezy.hr/json"""
+    new_items = []
+    seen = set(state.get("seen_breezy_ids", []))
+
+    for label, slug in BREEZY_BOARDS.items():
+        url = f"https://{slug}.breezy.hr/json"
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=20)
+            resp.raise_for_status()
+            for posting in resp.json():
+                title = posting.get("name", "")
+                if not KEYWORD_RE.search(title):
+                    continue
+                posting_id = posting.get("id")
+                if not posting_id or posting_id in seen:
+                    continue
+                new_items.append(
+                    {
+                        "source": f"{label} (Breezy)",
+                        "title": title,
+                        "link": posting.get("url", url),
+                    }
+                )
+                seen.add(posting_id)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] Error checking {label} (Breezy): {exc}")
+
+    state["seen_breezy_ids"] = list(seen)
+    return new_items
+
+
 def send_telegram(message: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("[warn] Telegram credentials not set, skipping send. Message was:")
@@ -165,12 +256,18 @@ def send_telegram(message: str):
         print(f"[error] Telegram send failed: {resp.status_code} {resp.text}")
 
 
-def format_message(dou_items, career_items):
+def format_message(dou_items, career_items, board_items):
     lines = []
     if dou_items:
         lines.append("🆕 New DOU Android vacancies:")
         for item in dou_items:
             lines.append(f"• {item['title']}\n  {item['link']}")
+        lines.append("")
+
+    if board_items:
+        lines.append("📋 New Android vacancies on company job boards:")
+        for item in board_items:
+            lines.append(f"• [{item['source']}] {item['title']}\n  {item['link']}")
         lines.append("")
 
     if career_items:
@@ -186,14 +283,15 @@ def main():
 
     dou_items = check_dou_feeds(state)
     career_items = check_career_pages(state)
+    board_items = check_lever_boards(state) + check_breezy_boards(state)
 
     save_state(state)
 
-    if not dou_items and not career_items:
+    if not dou_items and not career_items and not board_items:
         print("No new items found.")
         return
 
-    message = format_message(dou_items, career_items)
+    message = format_message(dou_items, career_items, board_items)
     print(message)
     send_telegram(message)
 
