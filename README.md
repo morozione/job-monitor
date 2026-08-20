@@ -13,7 +13,7 @@ looking for, in a couple of minutes.
 
 Every run does the same four things:
 
-1. **Fetch** from three kinds of sources:
+1. **Fetch** from four kinds of sources:
    - **RSS** (DOU.ua) — structured, reliable, parsed with `feedparser`.
    - **Career-page HTML scraping** — plain `requests.get()` + BeautifulSoup,
      looking for any link whose text or URL contains your keyword(s). Only
@@ -22,6 +22,12 @@ Every run does the same four things:
    - **Job-board JSON APIs** (Lever, Breezy HR) — companies using these
      recruiting platforms expose a public JSON feed of postings, which is
      far more reliable than scraping.
+   - **International remote job boards** (We Work Remotely, RemoteOK,
+     Remotive, Jobicy, Arbeitnow) — for finding English-speaking remote
+     roles outside Ukraine, typically higher-paying than the local market.
+     Same keyword filter (`SEARCH_KEYWORDS`) applies. Arbeitnow mixes
+     on-site and remote roles, so it's additionally filtered to its
+     `remote: true` listings.
 2. **Diff** what was found against `state.json` (a JSON file checked into
    the repo, tracking which item IDs / link snippets we've already alerted
    on) to figure out what's actually new.
@@ -85,6 +91,12 @@ Edit these dicts in `job_monitor.py`:
 - `CAREER_PAGES` — company name → career page URL, scraped for matching links.
 - `LEVER_BOARDS` — company name → Lever board slug (from `jobs.lever.co/<slug>`).
 - `BREEZY_BOARDS` — company name → Breezy HR slug (from `<slug>.breezy.hr`).
+- `WWR_RSS_FEEDS` — label → We Work Remotely category RSS URL, if you want
+  other categories beyond Programming.
+
+The international boards (RemoteOK, Remotive, Jobicy, Arbeitnow) query a
+single fixed API endpoint each (not per-company), so there's no dict to
+edit for those — they just apply your `SEARCH_KEYWORDS`.
 
 ### 6. Enable and test
 
@@ -112,6 +124,15 @@ for a free-tier tool. If a career page never seems to find anything:
 3. Options: check that source manually, look for a JSON API behind the
    widget (see how `LEVER_BOARDS`/`BREEZY_BOARDS` do this for ATS-backed
    career pages) and add it as a new source type, or accept the gap.
+
+**The international remote-board sources (We Work Remotely, RemoteOK,
+Remotive, Jobicy, Arbeitnow) were added from their publicly documented
+API/RSS shapes, but not live-verified from the environment they were
+written in** (its outbound network access is restricted and doesn't reach
+those sites). Check the first real Actions run's logs: a `[warn] Error
+checking <source>` line means that source's API has changed, is rate
+limiting, or is unreachable, and needs a fix (or removal) in
+`job_monitor.py`.
 
 ## Project layout
 
