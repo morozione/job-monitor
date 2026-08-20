@@ -12,9 +12,12 @@ full setup/customization guide — that's the source of truth for end users;
 keep it in sync with any behavior change.
 
 Files:
-- `job_monitor.py` — main script. Three source types: DOU RSS
+- `job_monitor.py` — main script. Four source types: DOU RSS
   (`check_dou_feeds`), career-page HTML link-scraping (`check_career_pages`),
-  Lever/Breezy job-board JSON APIs (`check_lever_boards`/`check_breezy_boards`).
+  Lever/Breezy job-board JSON APIs (`check_lever_boards`/`check_breezy_boards`),
+  and international remote-only job boards (`check_wwr_feeds`,
+  `check_remoteok`, `check_remotive`, `check_jobicy`, `check_arbeitnow`) for
+  English-speaking remote roles outside Ukraine.
 - `requirements.txt` — Python deps.
 - `state.json` — tracks what's already been seen (per source type, separate
   buckets), committed back to the repo by CI after every run — this file
@@ -65,7 +68,13 @@ the widget (as done for Lever/Breezy) over adding a browser dependency.
 - Don't add new source websites without asking — verify candidate URLs
   actually work (HTTP 200, and real matching content in the raw response —
   not JS-rendered) before proposing them, the way the Lever/Breezy/monobank/
-  MacPaw additions were verified in August 2026.
+  MacPaw additions were verified in August 2026. Exception on record: the
+  We Work Remotely/RemoteOK/Remotive/Jobicy/Arbeitnow international boards
+  (added 2026-08) were approved by the user but NOT live-verified, because
+  the dev session that added them had no outbound network access to those
+  sites — built from each API's public docs instead. Confirm they still
+  work by checking Actions run logs for `[warn] Error checking <source>`
+  after a real run; fix or remove any that error out consistently.
 - `SEARCH_KEYWORDS` is a GitHub Actions *variable*, not a secret — it isn't
   sensitive, and variables are easier for forkers to see/edit. Don't move it
   to secrets.
