@@ -47,6 +47,24 @@ Files:
 - Never print Telegram secret values back to the user or commit them to any
   file — secrets only, injected via GitHub Actions env vars.
 
+## Development workflow
+
+- For anything beyond a trivial one-line fix, use the `new-task-branch`
+  skill to start on a branch instead of committing straight to `main` —
+  `main` is live (CI commits `state.json` to it, and forkers use it as-is).
+- When adding or debugging a job source, use the `verify-job-source` skill
+  — it's the checklist behind the "verify before adding" constraint below.
+- CI reliability gotchas learned the hard way (2026-08):
+  - Scheduled runs can sit queued for hours on GitHub's free tier, so two
+    runs (or a manual dispatch overlapping a delayed schedule) can race to
+    push `state.json`. The workflow retries push with fetch+rebase for
+    this — if it still fails, don't just click "re-run failed jobs" on the
+    *same* stuck run (it can keep re-attempting against a stale state and
+    fail again); trigger a brand new `workflow_dispatch` run instead.
+  - `state.json`'s lists are sorted before writing specifically so
+    concurrent runs' diffs don't spuriously conflict on lines that didn't
+    really change (Python set iteration order is randomized per process).
+
 ## Known limitation to watch for
 
 Career-page scraping uses a simple HTTP GET and parses static HTML — it will
@@ -67,14 +85,15 @@ the widget (as done for Lever/Breezy) over adding a browser dependency.
 - Don't change the alert channel from Telegram without asking.
 - Don't add new source websites without asking — verify candidate URLs
   actually work (HTTP 200, and real matching content in the raw response —
-  not JS-rendered) before proposing them, the way the Lever/Breezy/monobank/
-  MacPaw additions were verified in August 2026. Exception on record: the
-  We Work Remotely/RemoteOK/Remotive/Jobicy/Arbeitnow international boards
-  (added 2026-08) were approved by the user but NOT live-verified, because
-  the dev session that added them had no outbound network access to those
-  sites — built from each API's public docs instead. Confirm they still
-  work by checking Actions run logs for `[warn] Error checking <source>`
-  after a real run; fix or remove any that error out consistently.
+  not JS-rendered) before proposing them. Use the `verify-job-source` skill
+  for the full checklist (reachability, JS-rendering check, whether the
+  source needs per-keyword server-side filtering vs. a fixed fetch, dedup
+  identifier stability) — all of Lever/Breezy/monobank/MacPaw/RemoteOK/
+  Jobicy/Arbeitnow/WWR were verified this way, most recently in August 2026
+  when RemoteOK/Jobicy were found to need per-keyword `?tags=`/`?tag=`
+  queries instead of their unfiltered feed (which only returns the most
+  recent ~50-100 postings across all categories — too narrow to ever
+  contain a niche keyword match).
 - `SEARCH_KEYWORDS` is a GitHub Actions *variable*, not a secret — it isn't
   sensitive, and variables are easier for forkers to see/edit. Don't move it
   to secrets.
