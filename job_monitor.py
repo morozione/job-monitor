@@ -137,6 +137,19 @@ def load_state():
 
 
 def save_state(state):
+    # Sort recursively so the output is deterministic run-to-run: the
+    # seen_*_ids lists come from python sets, whose iteration order is
+    # randomized per process, which otherwise turns every commit into a
+    # full-file reshuffle and makes concurrent CI runs conflict on lines
+    # that didn't actually change.
+    def _sorted(value):
+        if isinstance(value, list):
+            return sorted(value)
+        if isinstance(value, dict):
+            return {k: _sorted(v) for k, v in value.items()}
+        return value
+
+    state = {k: _sorted(v) for k, v in state.items()}
     STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
 
 

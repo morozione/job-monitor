@@ -39,5 +39,24 @@ jobs:
           git config user.name "job-monitor-bot"
           git config user.email "actions@github.com"
           git add state.json
-          git diff --staged --quiet || git commit -m "Update seen-jobs state [skip ci]"
-          git push
+          if git diff --staged --quiet; then
+            echo "No state changes to commit."
+            exit 0
+          fi
+          git commit -m "Update seen-jobs state [skip ci]"
+
+          # Scheduled runs can sit queued for a while on GitHub's free tier,
+          # so two runs (or a manual rerun) can end up racing to push. Retry
+          # with a rebase instead of failing outright, which would otherwise
+          # silently drop this run's state update and cause the next run to
+          # re-alert on the same items.
+          for attempt in 1 2 3 4 5; do
+            if git push; then
+              exit 0
+            fi
+            echo "Push rejected (attempt $attempt/5), rebasing onto latest main and retrying..."
+            git fetch origin main
+            git rebase origin/main
+          done
+          echo "::error::Failed to push state.json after 5 attempts"
+          exit 1
