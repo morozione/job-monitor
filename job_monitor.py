@@ -26,6 +26,7 @@ import os
 import re
 import sys
 from pathlib import Path
+from urllib.parse import quote
 
 import requests
 import feedparser
@@ -95,13 +96,18 @@ BREEZY_BOARDS = {
 
 # International remote-only job boards, for finding English-speaking remote
 # roles outside Ukraine (typically higher pay than the local market). Added
-# 2026-08 per user request. Unlike the sources above, these were NOT
-# live-verified from the dev sandbox they were written in -- outbound network
-# access there is restricted to an allowlist that doesn't include these
-# sites. They're built against each site's publicly documented API/RSS shape.
-# Check the Actions run logs after the first real run: a "[warn] Error
-# checking <source>" line means that source's API/feed has changed or is
-# unreachable and needs fixing (or removing).
+# 2026-08 per user request, live-verified 2026-08 (all 5 return HTTP 200
+# with the expected JSON/RSS shape).
+#
+# RemoteOK and Jobicy support real server-side tag filtering (?tags=/?tag=),
+# used per-keyword in check_remoteok/check_jobicy -- their *unfiltered*
+# endpoints only return the ~50-100 most recent postings across ALL
+# categories, which for a niche keyword like "android" is routinely zero
+# matches. We Work Remotely and Arbeitnow have no working keyword filter
+# (verified: Arbeitnow's ?tags= param is silently ignored, WWR's search page
+# isn't reliably scrapeable) so those two just scan their full current
+# listing client-side -- expect them to go quiet for runs at a time if
+# nothing currently posted happens to match, that's not a bug.
 WWR_RSS_FEEDS = {
     "We Work Remotely – Programming": "https://weworkremotely.com/categories/remote-programming-jobs.rss",
 }
@@ -145,7 +151,12 @@ def check_dou_feeds(state):
                 print(f"[warn] Could not parse feed for {label}: {feed.bozo_exception}")
                 continue
             for entry in feed.entries:
-                entry_id = entry.get("id") or entry.get("link")
+                # Prefer "link" over "id": DOU's RSS <guid> embeds a
+                # last-touched timestamp that DOU bumps periodically for the
+                # same vacancy (verified 2026-08), which would otherwise
+                # make check_dou_feeds re-alert on jobs already seen. "link"
+                # only carries a static utm_source param, so it's stable.
+                entry_id = entry.get("link") or entry.get("id")
                 if not entry_id:
                     continue
                 if not KEYWORD_RE.search(entry.get("title", "")):
@@ -286,7 +297,9 @@ def check_wwr_feeds(state):
                 print(f"[warn] Could not parse feed for {label}: {feed.bozo_exception}")
                 continue
             for entry in feed.entries:
-                entry_id = entry.get("id") or entry.get("link")
+                # Prefer "link" over "id" -- same reasoning as check_dou_feeds:
+                # a volatile "id" would cause re-alerts on already-seen jobs.
+                entry_id = entry.get("link") or entry.get("id")
                 if not entry_id:
                     continue
                 if not KEYWORD_RE.search(entry.get("title", "")):
@@ -308,38 +321,47 @@ def check_wwr_feeds(state):
 
 
 def check_remoteok(state):
-    """RemoteOK's public JSON API: https://remoteok.com/api
+    """RemoteOK's public JSON API, tag-filtered per keyword: https://remoteok.com/api?tags=<keyword>
 
-    The first array element is a legal-notice blob, not a job posting --
-    it has no "id" field, which is how we skip it.
+    The unfiltered /api endpoint only returns the ~100 most recently posted
+    jobs across ALL categories -- for a niche keyword like "android" that
+    routinely contains zero matches (verified 2026-08: 0/100 recent postings
+    matched "android" in the title, while ?tags=android immediately surfaced
+    real Android postings). Querying per-keyword instead, then still
+    confirming the keyword is in the title before alerting (the tag filter
+    is a bit loose and occasionally tags unrelated postings).
+
+    The first array element of a response is a legal-notice blob, not a job
+    posting -- it has no "id" field, which is how we skip it.
     """
     new_items = []
     seen = set(state.get("seen_remoteok_ids", []))
-    url = "https://remoteok.com/api"
 
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=20)
-        resp.raise_for_status()
-        for posting in resp.json():
-            posting_id = posting.get("id")
-            if not posting_id:
-                continue
-            title = posting.get("position", "")
-            if not KEYWORD_RE.search(title):
-                continue
-            if posting_id in seen:
-                continue
-            company = posting.get("company", "")
-            new_items.append(
-                {
-                    "source": "RemoteOK",
-                    "title": f"{title} @ {company}".strip(" @"),
-                    "link": posting.get("url", url),
-                }
-            )
-            seen.add(posting_id)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[warn] Error checking RemoteOK: {exc}")
+    for keyword in SEARCH_KEYWORDS:
+        url = f"https://remoteok.com/api?tags={quote(keyword)}"
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=20)
+            resp.raise_for_status()
+            for posting in resp.json():
+                posting_id = posting.get("id")
+                if not posting_id:
+                    continue
+                title = posting.get("position", "")
+                if not KEYWORD_RE.search(title):
+                    continue
+                if posting_id in seen:
+                    continue
+                company = posting.get("company", "")
+                new_items.append(
+                    {
+                        "source": "RemoteOK",
+                        "title": f"{title} @ {company}".strip(" @"),
+                        "link": posting.get("url", url),
+                    }
+                )
+                seen.add(posting_id)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] Error checking RemoteOK ({keyword}): {exc}")
 
     state["seen_remoteok_ids"] = list(seen)
     return new_items
@@ -378,32 +400,40 @@ def check_remotive(state):
 
 
 def check_jobicy(state):
-    """Jobicy's public JSON API: https://jobicy.com/api/v2/remote-jobs"""
+    """Jobicy's public JSON API, tag-filtered per keyword: https://jobicy.com/api/v2/remote-jobs?tag=<keyword>
+
+    Same reasoning as RemoteOK: the unfiltered feed only returns the most
+    recent ~50 postings across all categories (verified 2026-08: 0/50
+    matched "android"), while ?tag=android immediately surfaced real
+    Android postings. We query per-keyword and still confirm the keyword
+    is in the title before alerting.
+    """
     new_items = []
     seen = set(state.get("seen_jobicy_ids", []))
-    url = "https://jobicy.com/api/v2/remote-jobs?count=50"
 
-    try:
-        resp = requests.get(url, headers=HEADERS, timeout=20)
-        resp.raise_for_status()
-        for posting in resp.json().get("jobs", []):
-            title = posting.get("jobTitle", "")
-            if not KEYWORD_RE.search(title):
-                continue
-            posting_id = posting.get("id")
-            if not posting_id or posting_id in seen:
-                continue
-            company = posting.get("companyName", "")
-            new_items.append(
-                {
-                    "source": "Jobicy",
-                    "title": f"{title} @ {company}".strip(" @"),
-                    "link": posting.get("url", url),
-                }
-            )
-            seen.add(posting_id)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[warn] Error checking Jobicy: {exc}")
+    for keyword in SEARCH_KEYWORDS:
+        url = f"https://jobicy.com/api/v2/remote-jobs?count=50&tag={quote(keyword)}"
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=20)
+            resp.raise_for_status()
+            for posting in resp.json().get("jobs", []):
+                title = posting.get("jobTitle", "")
+                if not KEYWORD_RE.search(title):
+                    continue
+                posting_id = posting.get("id")
+                if not posting_id or posting_id in seen:
+                    continue
+                company = posting.get("companyName", "")
+                new_items.append(
+                    {
+                        "source": "Jobicy",
+                        "title": f"{title} @ {company}".strip(" @"),
+                        "link": posting.get("url", url),
+                    }
+                )
+                seen.add(posting_id)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] Error checking Jobicy ({keyword}): {exc}")
 
     state["seen_jobicy_ids"] = list(seen)
     return new_items

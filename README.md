@@ -125,14 +125,19 @@ for a free-tier tool. If a career page never seems to find anything:
    widget (see how `LEVER_BOARDS`/`BREEZY_BOARDS` do this for ATS-backed
    career pages) and add it as a new source type, or accept the gap.
 
-**The international remote-board sources (We Work Remotely, RemoteOK,
-Remotive, Jobicy, Arbeitnow) were added from their publicly documented
-API/RSS shapes, but not live-verified from the environment they were
-written in** (its outbound network access is restricted and doesn't reach
-those sites). Check the first real Actions run's logs: a `[warn] Error
-checking <source>` line means that source's API has changed, is rate
-limiting, or is unreachable, and needs a fix (or removal) in
-`job_monitor.py`.
+**The international remote boards are general-purpose, not Android-specific
+— don't expect them to fire every run.** Live-verified 2026-08: all 5 return
+HTTP 200 with the expected shape, but only RemoteOK and Jobicy support real
+server-side keyword filtering (`?tags=`/`?tag=`), so those two query
+per-keyword and reliably surface matches when any exist. We Work Remotely
+and Arbeitnow have no working filter param (Arbeitnow's `?tags=` is silently
+ignored; WWR's search page isn't reliably scrapeable), so those two just
+scan their current full/recent listing client-side — for a niche keyword
+like "android" it's normal for them to find nothing on a given run, or for
+several runs in a row. Check the Actions run logs if you're unsure: a
+`[warn] Error checking <source>` line means that source's API has actually
+changed or is unreachable and needs a fix (or removal) in `job_monitor.py`
+— no warning at all just means it ran fine and found nothing new.
 
 ## Project layout
 
